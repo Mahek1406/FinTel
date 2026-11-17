@@ -24,37 +24,49 @@ const app = express();
 // 1. Allowed frontend origins
 const allowedOrigins = [
   'http://localhost:5174',
+  'http://localhost:5173',
   'https://fintel-frontend.onrender.com'
 ];
 
-// 2. Security middleware
+// 2. CORS configuration
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests without an Origin header
+    // (health checks and server-to-server requests)
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error('Origin not allowed by CORS'));
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false
+};
+
+// 3. Security middleware
 app.use(helmet({
   crossOriginResourcePolicy: false
 }));
 
-// 3. CORS configuration
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: false,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+// 4. Enable CORS and preflight requests
+app.use(cors(corsOptions));
 
-// 4. Parse JSON requests
+// 5. Parse JSON
 app.use(express.json({
   limit: '200kb'
 }));
 
-// 5. Health check
-app.get('/api/health', (_req, res) => {
-  res.json({
+// 6. Health check
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
     status: 'ok',
     product: 'Fintel Secure',
     version: '2.0.0'
   });
 });
 
-// 6. API routes
+// 7. API routes
 app.use('/api/auth', authRoutes);
 
 app.use('/api/uploads/history', requireAuth, historyRoutes);
@@ -67,9 +79,16 @@ app.use('/api/cases', caseRoutes);
 app.use('/api/rules', ruleRoutes);
 app.use('/api/admin', adminRoutes);
 
-// 7. Error handling
-app.use((error, _req, res, _next) => {
+// 8. Handle unknown routes
+app.use((req, res) => {
+  res.status(404).json({
+    message: 'API endpoint not found.',
+    path: req.originalUrl
+  });
+});
 
+// 9. Error handling
+app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     return res.status(400).json({
       message: error.code === 'LIMIT_FILE_SIZE'
@@ -84,24 +103,31 @@ app.use((error, _req, res, _next) => {
     });
   }
 
-  console.error(error);
+  if (error?.message === 'Origin not allowed by CORS') {
+    return res.status(403).json({
+      message: 'Frontend origin is not allowed.'
+    });
+  }
+
+  console.error('[Fintel Error]:', error);
 
   res.status(error?.status || 500).json({
     message: error?.message || 'Internal server error.'
   });
 });
 
-// 8. Connect database and start server
+// 10. Connect database and start server
 connectDatabase()
   .then(() => {
-    app.listen(env.port, () => {
+    app.listen(env.port, '0.0.0.0', () => {
       console.log(`[Fintel] API running on port ${env.port}`);
+      console.log('[Fintel] CORS configured successfully');
     });
   })
   .catch((error) => {
     console.error(
-      `[Fintel] Local data store failed: ${error.message}`
+      `[Fintel] Database connection failed: ${error.message}`
     );
 
-    process.exitCode = 1;
+    process.exit(1);
   });
